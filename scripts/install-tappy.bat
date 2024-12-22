@@ -4,7 +4,7 @@ setlocal EnableDelayedExpansion
 
 :: Variables
 set "tempDir=%TEMP%\ReadyOrNotModPack"
-set "modpackUrl=https://bit.ly/tappy-modpack-zip"
+set "modpackUrl=https://github.com/wasinvalid/tappy-installer/raw/refs/heads/main/resources/tappy-modpack.zip"
 set "modpackName=mods.zip"
 set "defaultFolder=C:\Program Files (x86)\Steam\steamapps\common\Ready Or Not\ReadyOrNot\Content\Paks"
 set "steamLibraryPattern=\SteamLibrary\steamapps\common\Ready Or Not\ReadyOrNot\Content\Paks"
