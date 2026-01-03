@@ -12,7 +12,13 @@ function FetchModpackNames {
 
     try {
         $response = Invoke-RestMethod -Uri $repoUrl -Headers $headers
-        return $response | Where-Object { $_.type -eq 'file' } | Select-Object -ExpandProperty name
+
+        # Always return an array
+        return @(
+            $response |
+            Where-Object { $_.type -eq 'file' -and $_.name -like "*.zip" } |
+            Select-Object -ExpandProperty name
+        )
     }
     catch {
         Write-Host "Failed to fetch data from the repository."
@@ -23,129 +29,122 @@ function FetchModpackNames {
 
 function FormatModpackNames {
     param($fileNames)
-    return $fileNames | ForEach-Object {
-        # Remove .zip extension
-        $nameWithoutExtension = $_.Substring(0, $_.LastIndexOf('.'))
 
-        # Split by dash and capitalize each word
-        $words = $nameWithoutExtension.Split('-') | ForEach-Object { 
-            $_.Substring(0,1).ToUpper() + $_.Substring(1).ToLower()
+    $fileNames = @($fileNames) # force array
+
+    return @(
+        foreach ($file in $fileNames) {
+            $baseName = [System.IO.Path]::GetFileNameWithoutExtension($file)
+
+            (
+                $baseName -split '-' |
+                ForEach-Object {
+                    $_.Substring(0,1).ToUpper() + $_.Substring(1).ToLower()
+                }
+            ) -join ' '
         }
-        
-        # Join the words with spaces
-        $words -join ' '
-    }
+    )
 }
+
 
 function ShowMenu {
     param($choices, $selectedIndex)
-    Clear-Host  # Clear the screen before displaying the menu
-    for ($i = 0; $i -lt $choices.Length; $i++) {
+
+    Clear-Host
+    for ($i = 0; $i -lt $choices.Count; $i++) {
         if ($i -eq $selectedIndex) {
-            Write-Host "$($choices[$i])" -ForegroundColor White -BackgroundColor Blue
+            Write-Host $choices[$i] -ForegroundColor White -BackgroundColor Blue
         }
         else {
-            Write-Host "$($choices[$i])"
+            Write-Host $choices[$i]
         }
     }
 }
 
 function SelectModpack {
     param($choices)
+
+    $choices = @($choices) # safety
     $selectedIndex = 0
+
     while ($true) {
         ShowMenu -choices $choices -selectedIndex $selectedIndex
         $key = [System.Console]::ReadKey($true)
 
-        if ($key.Key -eq "UpArrow") {
-            $selectedIndex = ($selectedIndex - 1 + $choices.Length) % $choices.Length
-        }
-        elseif ($key.Key -eq "DownArrow") {
-            $selectedIndex = ($selectedIndex + 1) % $choices.Length
-        }
-        elseif ($key.Key -eq "Enter") {
-            Write-Host "`nYou selected: $($choices[$selectedIndex])"
-            return $choices[$selectedIndex]
+        switch ($key.Key) {
+            'UpArrow'   { $selectedIndex = ($selectedIndex - 1 + $choices.Count) % $choices.Count }
+            'DownArrow' { $selectedIndex = ($selectedIndex + 1) % $choices.Count }
+            'Enter' {
+                Write-Host "`nYou selected: $($choices[$selectedIndex])"
+                return $choices[$selectedIndex]
+            }
         }
     }
 }
 
 function InstallModpack {
-    param($modpackName)
-    $modpackUrl = "https://github.com/wasinvalid/tappy-installer/raw/refs/heads/main/resources/$($modpackName)-modpack.zip"
-    $tempDir = "$env:TEMP\ReadyOrNotModPack"
-    $modpackPath = "$tempDir\$($modpackName)-modpack.zip"
-    $defaultFolder = "C:\Program Files (x86)\Steam\steamapps\common\Ready Or Not\ReadyOrNot\Content\Paks"
-    $steamLibraryPattern = "\SteamLibrary\steamapps\common\Ready Or Not\ReadyOrNot\Content\Paks"
-    $modFolder = ""
+    param($displayName)
 
-    # Clean temporary directory (suppressing output)
-    if (Test-Path $tempDir) { Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue | Out-Null }
-    New-Item -ItemType Directory -Path $tempDir -ErrorAction SilentlyContinue | Out-Null
+    # Convert display name back to filename format
+    $modpackName = ($displayName -replace ' ', '-').ToLower()
+    $modpackUrl  = "https://github.com/wasinvalid/tappy-installer/raw/refs/heads/main/resources/$modpackName.zip"
 
-    # Check if default folder exists
-    if (Test-Path $defaultFolder) {
-        $modFolder = $defaultFolder
-        Write-Host "Found mod folder: $defaultFolder"
+    $tempDir     = "$env:TEMP\ReadyOrNotModPack"
+    $zipPath     = "$tempDir\$modpackName.zip"
+    $defaultPath = "C:\Program Files (x86)\Steam\steamapps\common\Ready Or Not\ReadyOrNot\Content\Paks"
+    $steamPattern = "\SteamLibrary\steamapps\common\Ready Or Not\ReadyOrNot\Content\Paks"
+
+    # Prepare temp
+    Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue | Out-Null
+    New-Item -ItemType Directory -Path $tempDir | Out-Null
+
+    # Find mod folder
+    $modFolder = $null
+    if (Test-Path $defaultPath) {
+        $modFolder = $defaultPath
     } else {
-        Write-Host "Default mod folder not found: $defaultFolder"
-        # Search for the mod folder in all drives
         foreach ($drive in Get-PSDrive -PSProvider FileSystem) {
-            $currentPath = "$($drive.Root)$steamLibraryPattern"
-            if (Test-Path $currentPath) {
-                $modFolder = $currentPath
-                Write-Host "Found mod folder: $modFolder"
+            $path = "$($drive.Root)$steamPattern"
+            if (Test-Path $path) {
+                $modFolder = $path
                 break
             }
         }
     }
 
     if (-not $modFolder) {
-        Write-Host "Error: Mod folder not found."
+        Write-Host "Mod folder not found."
         WaitUntilContinued
         Exit
     }
 
-    # Check if mod is already installed
-    if (Test-Path "$modFolder\mods") {
-        Write-Host "Mod already installed."
-        WaitUntilContinued
-        Exit
-    }
-
-    # Download the modpack (suppressing unnecessary output)
     Write-Host "Downloading modpack..."
-    Invoke-WebRequest -Uri $modpackUrl -OutFile $modpackPath -ErrorAction SilentlyContinue | Out-Null
+    Invoke-WebRequest -Uri $modpackUrl -OutFile $zipPath -ErrorAction SilentlyContinue | Out-Null
 
-    if (-not (Test-Path $modpackPath)) {
-        Write-Host "Error: Download failed."
+    if (-not (Test-Path $zipPath)) {
+        Write-Host "Download failed."
         WaitUntilContinued
         Exit
     }
-
-    Write-Host "Download completed. Moving modpack..."
-    Move-Item -Force $modpackPath -Destination $modFolder -ErrorAction SilentlyContinue | Out-Null
 
     Write-Host "Extracting modpack..."
-    Expand-Archive -Path "$modFolder\$($modpackName)-modpack.zip" -DestinationPath $modFolder -Force -ErrorAction SilentlyContinue | Out-Null
+    Expand-Archive -Path $zipPath -DestinationPath $modFolder -Force | Out-Null
 
-    if ($?) {
-        Write-Host "Modpack installed successfully."
-    } else {
-        Write-Host "Error: Failed to extract modpack."
-    }
-
-    # Clean up (suppressing output)
-    Remove-Item -Path "$modFolder\$($modpackName)-modpack.zip" -Force -ErrorAction SilentlyContinue | Out-Null
+    Write-Host "Modpack installed successfully!"
     WaitUntilContinued
 }
 
-# --- Main Flow ---
-Write-Host "Loading options..."
-$fileNames = FetchModpackNames
-$formattedNames = FormatModpackNames -fileNames $fileNames
+# --- Main ---
+Write-Host "Loading modpacks..."
+$fileNames      = FetchModpackNames
+$formattedNames = FormatModpackNames $fileNames
+
+if ($formattedNames.Count -eq 0) {
+    Write-Host "No modpacks found."
+    WaitUntilContinued
+    Exit
+}
 
 Write-Host "`nSelect a modpack:"
-$selectedModpack = SelectModpack -choices $formattedNames
-
-InstallModpack -modpackName $selectedModpack
+$selectedModpack = SelectModpack $formattedNames
+InstallModpack $selectedModpack
